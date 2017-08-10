@@ -81,7 +81,7 @@ void loop() {
   uint32_t totalSeconds = now.TotalSeconds();
   
   if (totalSeconds >= nextTotalSeconds) {
-    nextTotalSeconds = totalSeconds + 0.5*60; // wait 5 minutes
+    nextTotalSeconds = totalSeconds + 5*60; // wait 5 minutes
 
     Serial.print("datetime: ");
     Serial.println(Helper::getFormatedDateTime(now));
