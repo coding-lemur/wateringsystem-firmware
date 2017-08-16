@@ -13,6 +13,7 @@
 
 #include "DhtHelper.h"
 #include "Helper.h"
+#include "Watering.h"
 
 #define DHT_PIN                     D4
 #define PUMP_ACTIVATE_PIN           D5
@@ -21,6 +22,9 @@
 
 #define DHT_TYPE                    DHT11
 #define NTP_TIME_OFFSET             7200 // for timezone (in seconds) = 2h
+
+#define TOPIC_SENSORS               "wateringsystem/sensors"
+#define TOPIC_WATERING              "wateringsystem/watering"
 
 const char* ssid          = "mywifi";
 const char* password      = "123456";
@@ -33,6 +37,7 @@ RtcDS3231<TwoWire> Rtc(Wire);
 DynamicJsonBuffer jsonBuffer;
 
 DhtHelper dhtHelper(DHT_PIN, DHT_TYPE);
+Watering watering(PUMP_ACTIVATE_PIN);
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -43,31 +48,24 @@ PubSubClient mqttClient(espClient);
 uint32_t nextTotalSeconds = 0;
 
 void setup() {
-  pinMode(PUMP_ACTIVATE_PIN, OUTPUT);
   pinMode(WATER_SENSOR_ACTIVATE_PIN, OUTPUT);
   pinMode(WATER_SENSOR_PIN, INPUT);
-  
-  Serial.begin(115200);
-  
-  delay(100);
-  
-  Rtc.Begin();
-  dhtHelper.begin();
-  
-  delay(100);
 
+  watering.setup();
+  
+  setupSerials();
   setupWifi();
   setupMqttClient();
   setupNtpClient();
 
-  adjustDateTime();
+  adjustRTC();
 }
 
 void loop() {
   if (!mqttClient.connected()) {
     reconnectMqttClient();
   }
-
+  
   /*
   if (!Rtc.IsDateTimeValid()) 
   {
@@ -100,6 +98,18 @@ void loop() {
   }
 
   mqttClient.loop();
+  watering.loop();
+}
+
+void setupSerials() {
+  Serial.begin(115200);
+  
+  delay(100);
+  
+  Rtc.Begin();
+  dhtHelper.begin();
+  
+  delay(100);
 }
 
 void setupWifi() {
@@ -132,7 +142,7 @@ void setupNtpClient() {
   timeClient.setTimeOffset(NTP_TIME_OFFSET);
 }
 
-void adjustDateTime() {
+void adjustRTC() {
   if (!Rtc.IsDateTimeValid()) {
     Serial.println("adjust RTC");
 
@@ -166,7 +176,6 @@ RtcDateTime getDateTimeFromNTP() {
   return RtcDateTime(timestampFrom2000);
 }
 
-
 int getWaterValue() {
   // enable water sensor
   digitalWrite(WATER_SENSOR_ACTIVATE_PIN, HIGH);
@@ -192,13 +201,7 @@ void publishSensorValues(float temperature, float humidity, int soilMoisture) {
   char buffer[64];  
   json.printTo(buffer);
   
-  mqttClient.publish("wateringsystem/sensors", buffer);
-}
-
-void watering(int milliseconds) {
-  digitalWrite(PUMP_ACTIVATE_PIN, HIGH);
-  delay(milliseconds);
-  digitalWrite(PUMP_ACTIVATE_PIN, LOW);
+  mqttClient.publish(TOPIC_SENSORS, buffer);
 }
 
 void reconnectMqttClient() {
@@ -209,7 +212,7 @@ void reconnectMqttClient() {
     if (mqttClient.connect("watering_system", mqtt_user, mqtt_password)) {
       Serial.println("connected");
 
-      mqttClient.subscribe("wateringsystem/watering");
+      mqttClient.subscribe(TOPIC_WATERING);
   } else {
     Serial.print("failed, rc=");
     Serial.print(mqttClient.state());
@@ -223,10 +226,14 @@ void reconnectMqttClient() {
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   // handle message arrived
+  
+  String payloadString = Helper::byteArrayToString(payload, length);
+  
   Serial.print("Message arrived [");
   Serial.print(topic);
   Serial.print("] ");
   Serial.println();
-  String payloadString = Helper::byteArrayToString(payload, length);
   Serial.println(payloadString);
+  
+  watering.startPump(payloadString.toInt());
 }
