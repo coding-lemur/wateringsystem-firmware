@@ -16,13 +16,22 @@ void DhtHelper::begin() {
 }
 
 void DhtHelper::refreshValues() {
+  byte retries = 0;
+  
   do {
     _temperature = _dht.readTemperature();
     _humidity = _dht.readHumidity();
     
     if (isnan(_temperature) || isnan(_humidity)) {
+      retries++;
+  
+      if (retries > 10) {
+        break;
+      }
+      
       delay(250);
     }
+
   } while (isnan(_temperature) || isnan(_humidity));
 }
 
