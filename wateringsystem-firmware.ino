@@ -79,21 +79,15 @@ void loop() {
   uint32_t totalSeconds = now.TotalSeconds();
   
   if (totalSeconds >= nextTotalSeconds) {
-    nextTotalSeconds = totalSeconds + 5*60; // wait 5 minutes
-
-    Serial.print("datetime: ");
-    Serial.println(Helper::getFormatedDateTime(now));
+    nextTotalSeconds = totalSeconds + 5 * 60; // wait 5 minutes
     
     dhtHelper.refreshValues();
-    float temperature = dhtHelper.getTemperature();
-    float humidity    = dhtHelper.getHumidity();
+    int temperature = dhtHelper.getTemperature();
+    int humidity    = dhtHelper.getHumidity();
     
-    Serial.println("temperature: " + String(temperature) + "C");
-    Serial.println("humidity: " + String(humidity) + "%");
-  
     int soilMoisture = getWaterValue();
-    Serial.println("water: " + String(soilMoisture));
-
+    
+    debugOutputValues(now, temperature, humidity, soilMoisture);
     publishSensorValues(temperature, humidity, soilMoisture);
   }
 
@@ -105,7 +99,8 @@ void setupSerials() {
   Serial.begin(115200);
   
   delay(100);
-  
+
+  Wire.begin();
   Rtc.Begin();
   dhtHelper.begin();
   
@@ -191,7 +186,23 @@ int getWaterValue() {
   return value;
 }
 
-void publishSensorValues(float temperature, float humidity, int soilMoisture) {
+void debugOutputValues(RtcDateTime dateTime, int temperature, int humidity, int soilMoisture) {
+  Serial.print("datetime: ");
+  Serial.println(Helper::getFormatedDateTime(dateTime));
+  
+  Serial.print("temperature: ");
+  Serial.print(temperature);
+  Serial.println("C");
+  
+  Serial.print("humidity: ");
+  Serial.print(humidity);
+  Serial.println("%");
+  
+  Serial.print("water: ");
+  Serial.println(soilMoisture);
+}
+
+void publishSensorValues(int temperature, int humidity, int soilMoisture) {
   JsonObject& json = jsonBuffer.createObject();
   
   json["Temperature"]  = temperature;
