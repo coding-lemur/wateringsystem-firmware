@@ -43,6 +43,7 @@ void Watering::_stopPump() {
 
 void Watering::setup() {
   pinMode(_pumpActivatePin, OUTPUT);
+  digitalWrite(_pumpActivatePin, LOW);
 }
 
 void Watering::loop() {
