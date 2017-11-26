@@ -11,9 +11,12 @@
 #include <RtcDS3231.h>
 #include <ArduinoJson.h>
 
+#include <SSD1306.h>
+
 #include "DhtHelper.h"
 #include "Helper.h"
 #include "Watering.h"
+#include "SensorValues.h"
 
 #define DHT_PIN                     D4
 #define PUMP_ACTIVATE_PIN           D5
@@ -25,6 +28,7 @@
 
 #define TOPIC_SENSORS               "wateringsystem/sensors"
 #define TOPIC_WATERING              "wateringsystem/watering"
+#define TOPIC_MEASURING             "wateringsystem/measuring"
 
 const char* ssid          = "mywifi";
 const char* password      = "123456";
@@ -45,6 +49,8 @@ NTPClient timeClient(ntpUDP);
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 
+SSD1306 display(0x3C, SDA, SCL);
+
 uint32_t nextTotalSeconds = 0;
 
 void setup() {
@@ -57,6 +63,7 @@ void setup() {
   setupWifi();
   setupMqttClient();
   setupNtpClient();
+  setupDisplay();
 
   adjustRTC();
 }
@@ -81,18 +88,20 @@ void loop() {
   if (totalSeconds >= nextTotalSeconds) {
     nextTotalSeconds = totalSeconds + 5 * 60; // wait 5 minutes
     
-    dhtHelper.refreshValues();
-    int temperature = dhtHelper.getTemperature();
-    int humidity    = dhtHelper.getHumidity();
-    
-    int soilMoisture = getWaterValue();
-    
-    debugOutputValues(now, temperature, humidity, soilMoisture);
-    publishSensorValues(temperature, humidity, soilMoisture);
+    doMeasure(now);
   }
 
   mqttClient.loop();
   watering.loop();
+}
+
+void doMeasure(RtcDateTime dateTime) {
+  SensorValues values = getSensorValues();
+
+  debugOutputValues(dateTime, values);
+  displaySensorValues(dateTime, values);
+  
+  publishSensorValues(values);
 }
 
 void setupSerials() {
@@ -118,7 +127,7 @@ void setupWifi() {
     Serial.print(".");
   }
 
-  Serial.println("");
+  Serial.println();
   Serial.println("WiFi connected"); 
    
   Serial.print("IP address: ");
@@ -135,6 +144,12 @@ void setupMqttClient() {
 void setupNtpClient() {
   // set timezone
   timeClient.setTimeOffset(NTP_TIME_OFFSET);
+}
+
+void setupDisplay() {
+  display.init();
+  
+  display.flipScreenVertically();
 }
 
 void adjustRTC() {
@@ -171,6 +186,16 @@ RtcDateTime getDateTimeFromNTP() {
   return RtcDateTime(timestampFrom2000);
 }
 
+SensorValues getSensorValues() {
+  dhtHelper.refreshValues();
+  int temperature = dhtHelper.getTemperature();
+  int humidity    = dhtHelper.getHumidity();
+  
+  int soilMoisture = getWaterValue();
+
+  return SensorValues(temperature, humidity, soilMoisture);
+}
+
 int getWaterValue() {
   // enable water sensor
   digitalWrite(WATER_SENSOR_ACTIVATE_PIN, HIGH);
@@ -186,28 +211,42 @@ int getWaterValue() {
   return value;
 }
 
-void debugOutputValues(RtcDateTime dateTime, int temperature, int humidity, int soilMoisture) {
+void debugOutputValues(RtcDateTime dateTime, SensorValues values) {
   Serial.print("datetime: ");
   Serial.println(Helper::getFormatedDateTime(dateTime));
   
   Serial.print("temperature: ");
-  Serial.print(temperature);
+  Serial.print(values.getTemperature());
   Serial.println("C");
   
   Serial.print("humidity: ");
-  Serial.print(humidity);
+  Serial.print(values.getHumidity());
   Serial.println("%");
   
   Serial.print("water: ");
-  Serial.println(soilMoisture);
+  Serial.println(values.getSoilMoisture());
 }
 
-void publishSensorValues(int temperature, int humidity, int soilMoisture) {
+void displaySensorValues(RtcDateTime dateTime, SensorValues values) {
+  display.clear();
+
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 0, Helper::getFormatedDateTime(dateTime));
+
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(0, 15, String(values.getTemperature()) + " °C");
+  display.drawString(0, 31, String(values.getHumidity()) + "%");
+  display.drawString(0, 47, String(values.getSoilMoisture()));
+  
+  display.display();
+}
+
+void publishSensorValues(SensorValues values) {
   JsonObject& json = jsonBuffer.createObject();
   
-  json["Temperature"]  = temperature;
-  json["Humidity"]     = humidity;
-  json["SoilMoisture"] = soilMoisture;
+  json["Temperature"]  = values.getTemperature();
+  json["Humidity"]     = values.getHumidity();
+  json["SoilMoisture"] = values.getSoilMoisture();
   
   char buffer[64];  
   json.printTo(buffer);
@@ -235,16 +274,26 @@ void reconnectMqttClient() {
  }
 }
 
+// handle message arrived
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // handle message arrived
-  
   String payloadString = Helper::byteArrayToString(payload, length);
   
   Serial.print("Message arrived [");
   Serial.print(topic);
-  Serial.print("] ");
-  Serial.println();
+  Serial.println("] ");
+  Serial.print("payload: ");
   Serial.println(payloadString);
-  
-  watering.startPump(payloadString.toInt());
+
+  if (topic == TOPIC_WATERING) {
+    int wateringMilliseconds = payloadString.toInt();
+
+    // value in rage (between 1 second and 3 minutes)?
+    if ((wateringMilliseconds >= 1000) && (wateringMilliseconds <= 180000)) {
+      watering.startPump(wateringMilliseconds);
+    }
+  }
+  else if (topic == TOPIC_MEASURING) {
+    RtcDateTime now = Rtc.GetDateTime();
+    doMeasure(now);
+  }
 }
