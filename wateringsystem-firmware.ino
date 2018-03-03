@@ -21,14 +21,17 @@
 #define DHT_PIN                     D4
 #define PUMP_ACTIVATE_PIN           D5
 #define WATER_SENSOR_ACTIVATE_PIN   D6
+#define RTC_ACTIVATE_PIN            D7
 #define WATER_SENSOR_PIN            A0
 
 #define DHT_TYPE                    DHT11
-#define NTP_TIME_OFFSET             7200 // for timezone (in seconds) = 2h
+#define NTP_TIME_OFFSET             3600 // for timezone (in seconds) = 1h
 
 #define TOPIC_SENSORS               "wateringsystem/sensors"
-#define TOPIC_WATERING              "wateringsystem/watering"
-#define TOPIC_MEASURING             "wateringsystem/measuring"
+#define TOPIC_WATERING              "wateringsystem/actions/watering"
+#define TOPIC_MEASURING             "wateringsystem/actions/measuring"
+#define TOPIC_ADJUST_RTC            "wateringsystem/actions/rtc/adjust"
+#define TOPIC_SUBSCRIPTION          "wateringsystem/actions/#"
 
 const char* ssid          = "mywifi";
 const char* password      = "123456";
@@ -44,7 +47,7 @@ DhtHelper dhtHelper(DHT_PIN, DHT_TYPE);
 Watering watering(PUMP_ACTIVATE_PIN);
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
+NTPClient timeClient(ntpUDP, NTP_TIME_OFFSET);
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -57,13 +60,16 @@ void setup() {
   pinMode(WATER_SENSOR_ACTIVATE_PIN, OUTPUT);
   pinMode(WATER_SENSOR_PIN, INPUT);
 
+  pinMode(RTC_ACTIVATE_PIN, OUTPUT);
+  digitalWrite(RTC_ACTIVATE_PIN, HIGH);
+
   watering.setup();
   
   setupSerials();
+  setupDisplay();
   setupWifi();
   setupMqttClient();
   setupNtpClient();
-  setupDisplay();
 
   adjustRTC();
 }
@@ -73,20 +79,11 @@ void loop() {
     reconnectMqttClient();
   }
   
-  /*
-  if (!Rtc.IsDateTimeValid()) 
-  {
-    // Common Cuases:
-    //    1) the battery on the device is low or even missing and the power line was disconnected
-    Serial.println("RTC lost confidence in the DateTime!");
-  }
-  */
-  
-  RtcDateTime now = Rtc.GetDateTime();
+  RtcDateTime now = Rtc.GetDateTime();  
   uint32_t totalSeconds = now.TotalSeconds();
   
   if (totalSeconds >= nextTotalSeconds) {
-    nextTotalSeconds = totalSeconds + 5 * 60; // wait 5 minutes
+    nextTotalSeconds = totalSeconds + 3600; // wait 1 hour
     
     doMeasure(now);
   }
@@ -105,11 +102,11 @@ void doMeasure(RtcDateTime dateTime) {
 }
 
 void setupSerials() {
-  Serial.begin(115200);
+  Serial.begin(57600);
   
   delay(100);
 
-  Wire.begin();
+  //Wire.begin();
   Rtc.Begin();
   dhtHelper.begin();
   
@@ -142,14 +139,13 @@ void setupMqttClient() {
 }
 
 void setupNtpClient() {
-  // set timezone
-  timeClient.setTimeOffset(NTP_TIME_OFFSET);
+  timeClient.begin();
 }
 
 void setupDisplay() {
   display.init();
-  
   display.flipScreenVertically();
+  display.clear();
 }
 
 void adjustRTC() {
@@ -157,9 +153,6 @@ void adjustRTC() {
     Serial.println("adjust RTC");
 
     RtcDateTime now = getDateTimeFromNTP();
-    Serial.print("NTP datetime: ");
-    Serial.println(Helper::getFormatedDateTime(now));
-    
     Rtc.SetDateTime(now);
   }
   
@@ -171,19 +164,33 @@ void adjustRTC() {
   // never assume the Rtc was last configured by you, so
   // just clear them to your needed state
   Rtc.Enable32kHzPin(false);
-  Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone); 
+  Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone);
 }
 
 RtcDateTime getDateTimeFromNTP() {
-  // get time from NTP
-  timeClient.begin();
-  timeClient.forceUpdate();
-  timeClient.end();
+  Serial.print("get time from NTP ");
   
-  long timestamp = timeClient.getEpochTime();
-  long timestampFrom2000 = timestamp - 946684800; // calc timestamp from 2000
-  
-  return RtcDateTime(timestampFrom2000);
+  while (true) {
+    Serial.print(".");
+    
+    // get time from NTP
+    timeClient.update();
+    long epocheTime = timeClient.getEpochTime();
+
+    if (epocheTime > 1519561919) { // is correct
+      // calc timestamp from 2000
+      long timestampFrom2000 = epocheTime - 946684800;
+      
+      RtcDateTime dateTime = RtcDateTime(timestampFrom2000);
+      
+      Serial.print(" ");
+      Serial.println(Helper::getFormatedDateTime(dateTime));
+      
+      return dateTime;
+    }
+
+    delay(200);
+  }
 }
 
 SensorValues getSensorValues() {
@@ -262,7 +269,7 @@ void reconnectMqttClient() {
     if (mqttClient.connect("watering_system", mqtt_user, mqtt_password)) {
       Serial.println("connected");
 
-      mqttClient.subscribe(TOPIC_WATERING);
+      mqttClient.subscribe(TOPIC_SUBSCRIPTION);
   } else {
     Serial.print("failed, rc=");
     Serial.print(mqttClient.state());
@@ -277,23 +284,30 @@ void reconnectMqttClient() {
 // handle message arrived
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String payloadString = Helper::byteArrayToString(payload, length);
+  String topicString = String(topic);
   
   Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.println("] ");
+  Serial.print(topicString);
+  Serial.println("]");
+  
   Serial.print("payload: ");
   Serial.println(payloadString);
-
-  if (topic == TOPIC_WATERING) {
+  
+  if (topicString == TOPIC_WATERING) {
     int wateringMilliseconds = payloadString.toInt();
+    Serial.print("watering value as int: ");
+    Serial.println(wateringMilliseconds);
 
     // value in rage (between 1 second and 3 minutes)?
     if ((wateringMilliseconds >= 1000) && (wateringMilliseconds <= 180000)) {
       watering.startPump(wateringMilliseconds);
     }
   }
-  else if (topic == TOPIC_MEASURING) {
+  else if (topicString == TOPIC_MEASURING) {
     RtcDateTime now = Rtc.GetDateTime();
     doMeasure(now);
+  }
+  else if (topicString == TOPIC_ADJUST_RTC) {
+    adjustRTC();
   }
 }
