@@ -45,3 +45,22 @@ String Helper::byteArrayToString(byte* bytes, unsigned int length) {
   return result;
 }
 
+String Helper::getFormatedSeconds(uint32_t valueInSeconds) {
+  //int days = elapsedDays(valueInSeconds);
+  int hours = numberOfHours(valueInSeconds);
+  int minutes = numberOfMinutes(valueInSeconds);
+  int seconds = numberOfSeconds(valueInSeconds);
+
+  return printDigits(hours) + ":" + printDigits(minutes) + ":" + printDigits(seconds);
+}
+
+// utility function for digital clock display: prints colon and leading 0
+String Helper::printDigits(byte digits){
+  String result = "";
+  
+  if(digits < 10)
+    result += "0";
+  
+  return result + String(digits, DEC);
+}
+
