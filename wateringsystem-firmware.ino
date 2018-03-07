@@ -55,6 +55,7 @@ PubSubClient mqttClient(espClient);
 SSD1306 display(0x3C, SDA, SCL);
 
 uint32_t nextTotalSeconds = 0;
+SensorValues values(0, 0, 0);
 
 void setup() {
   pinMode(WATER_SENSOR_ACTIVATE_PIN, OUTPUT);
@@ -82,10 +83,19 @@ void loop() {
   RtcDateTime now = Rtc.GetDateTime();  
   uint32_t totalSeconds = now.TotalSeconds();
   
-  if (totalSeconds >= nextTotalSeconds) {
+  if (totalSeconds >= nextTotalSeconds) {    
     nextTotalSeconds = totalSeconds + 3600; // wait 1 hour
-    
     doMeasure(now);
+  }
+
+  uint32_t secondsToNextUpdate = nextTotalSeconds - totalSeconds;
+
+  if (!watering.isWatering()) {
+    display.clear();
+    displaySensorValues(now, values);
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 50, "update in " + Helper::getFormatedSeconds(secondsToNextUpdate));
+    display.display();
   }
 
   mqttClient.loop();
@@ -93,11 +103,9 @@ void loop() {
 }
 
 void doMeasure(RtcDateTime dateTime) {
-  SensorValues values = getSensorValues();
+  values = getSensorValues();
 
   debugOutputValues(dateTime, values);
-  displaySensorValues(dateTime, values);
-  
   publishSensorValues(values);
 }
 
@@ -116,6 +124,12 @@ void setupSerials() {
 void setupWifi() {
   Serial.print("Connecting to ");
   Serial.println(ssid);
+
+  display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 2, "watering system");
+  display.drawString(0, 15, "connecting to wifi...");
+  display.display();
   
   WiFi.begin(ssid, password);
   
@@ -125,7 +139,7 @@ void setupWifi() {
   }
 
   Serial.println();
-  Serial.println("WiFi connected"); 
+  Serial.println("WiFi connected");
    
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
@@ -145,10 +159,21 @@ void setupNtpClient() {
 void setupDisplay() {
   display.init();
   display.flipScreenVertically();
+  
   display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 2, "watering sytem");
+  display.drawString(0, 15, "booting...");
+  display.display();
 }
 
 void adjustRTC() {
+  display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 2, "watering system");
+  display.drawString(0, 15, "adjust clock...");
+  display.display();
+  
   if (!Rtc.IsDateTimeValid()) {
     Serial.println("adjust RTC");
 
@@ -235,17 +260,13 @@ void debugOutputValues(RtcDateTime dateTime, SensorValues values) {
 }
 
 void displaySensorValues(RtcDateTime dateTime, SensorValues values) {
-  display.clear();
-
   display.setFont(ArialMT_Plain_10);
   display.drawString(0, 0, Helper::getFormatedDateTime(dateTime));
 
   display.setFont(ArialMT_Plain_16);
   display.drawString(0, 15, String(values.getTemperature()) + " °C");
-  display.drawString(0, 31, String(values.getHumidity()) + "%");
-  display.drawString(0, 47, String(values.getSoilMoisture()));
-  
-  display.display();
+  display.drawString(64, 15, String(values.getHumidity()) + "%");
+  display.drawString(64, 31, String(values.getSoilMoisture()));
 }
 
 void publishSensorValues(SensorValues values) {
@@ -300,14 +321,32 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
     // value in rage (between 1 second and 3 minutes)?
     if ((wateringMilliseconds >= 1000) && (wateringMilliseconds <= 180000)) {
+      display.clear();
+      display.setFont(ArialMT_Plain_10);
+      display.drawString(0, 2, "MQTT action");
+      display.drawString(0, 15, "watering " + String(wateringMilliseconds) + " millis");
+      display.display();
+      
       watering.startPump(wateringMilliseconds);
     }
   }
   else if (topicString == TOPIC_MEASURING) {
+    display.clear();
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 2, "MQTT action");
+    display.drawString(0, 15, "measuring...");
+    display.display();
+    
     RtcDateTime now = Rtc.GetDateTime();
     doMeasure(now);
   }
   else if (topicString == TOPIC_ADJUST_RTC) {
+    display.clear();
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 2, "MQTT action");
+    display.drawString(0, 15, "adjust clock...");
+    display.display();
+    
     adjustRTC();
   }
 }

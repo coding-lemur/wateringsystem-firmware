@@ -15,7 +15,7 @@ class SensorValues {
     int getHumidity();
     int getSoilMoisture();
     
-   private:
+  private:
     int _temperature;
     int _humidity;
     int _soilMoisture;
