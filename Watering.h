@@ -13,6 +13,7 @@ class Watering {
     void startPump(int milliseconds);
     void setup();
     void loop();
+    bool isWatering();
     
   private:
     uint8_t _pumpActivatePin;

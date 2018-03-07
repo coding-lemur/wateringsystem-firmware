@@ -58,3 +58,7 @@ void Watering::loop() {
   }
 }
 
+bool Watering::isWatering() {
+  return _isWatering;
+}
+
