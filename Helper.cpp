@@ -24,17 +24,6 @@ String Helper::getFormatedDateTime(const RtcDateTime& dt) {
   return datestring;
 }
 
-/*
-const char* Helper::floatToCharArray(float value) {
-  char buffer[64];
-  int bufferSize = sizeof buffer;
-  
-  String(value).toCharArray(buffer, bufferSize);
-  
-  return buffer;
-}
-*/
-
 String Helper::byteArrayToString(byte* bytes, unsigned int length) {
   String result = "";
   
@@ -45,7 +34,7 @@ String Helper::byteArrayToString(byte* bytes, unsigned int length) {
   return result;
 }
 
-String Helper::getFormatedSeconds(uint32_t valueInSeconds) {
+String Helper::getFormatedSeconds(unsigned long valueInSeconds) {
   //int days = elapsedDays(valueInSeconds);
   int hours = numberOfHours(valueInSeconds);
   int minutes = numberOfMinutes(valueInSeconds);

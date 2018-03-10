@@ -24,9 +24,8 @@
 class Helper {
   public:
     static String getFormatedDateTime(const RtcDateTime& dt);
-    static const char* floatToCharArray(float value);
     static String byteArrayToString(byte* bytes, unsigned int length);
-    static String getFormatedSeconds(uint32_t valueInSeconds);
+    static String getFormatedSeconds(unsigned long valueInSeconds);
 
   private:
     static String printDigits(byte digits);

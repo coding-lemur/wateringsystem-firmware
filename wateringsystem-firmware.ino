@@ -54,8 +54,9 @@ PubSubClient mqttClient(espClient);
 
 SSD1306 display(0x3C, SDA, SCL);
 
-uint32_t nextTotalSeconds = 0;
+unsigned long nextMeasuringSeconds = 0;
 SensorValues values(0, 0, 0);
+boolean measuringInProgress = false;
 
 void setup() {
   pinMode(WATER_SENSOR_ACTIVATE_PIN, OUTPUT);
@@ -81,20 +82,20 @@ void loop() {
   }
   
   RtcDateTime now = Rtc.GetDateTime();  
-  uint32_t totalSeconds = now.TotalSeconds();
   
-  if (totalSeconds >= nextTotalSeconds) {    
-    nextTotalSeconds = totalSeconds + 3600; // wait 1 hour
+  unsigned long totalSeconds = now.TotalSeconds();
+    
+  if (totalSeconds >= nextMeasuringSeconds) {
+    nextMeasuringSeconds = totalSeconds + 3600; // wait 1 hour
     doMeasure(now);
   }
 
-  uint32_t secondsToNextUpdate = nextTotalSeconds - totalSeconds;
-
-  if (!watering.isWatering()) {
+  unsigned long nextMeasuringCounter = nextMeasuringSeconds - totalSeconds;
+  
+  if (!watering.isWatering() && !measuringInProgress) {
     display.clear();
     displaySensorValues(now, values);
-    display.setFont(ArialMT_Plain_10);
-    display.drawString(0, 50, "update in " + Helper::getFormatedSeconds(secondsToNextUpdate));
+    displayUpdateCounter(nextMeasuringCounter);
     display.display();
   }
 
@@ -103,10 +104,19 @@ void loop() {
 }
 
 void doMeasure(RtcDateTime dateTime) {
+  measuringInProgress = true;
+  
+  display.clear();
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 2, "measuring...");
+  display.display();
+  
   values = getSensorValues();
 
   debugOutputValues(dateTime, values);
   publishSensorValues(values);
+
+  measuringInProgress = false;
 }
 
 void setupSerials() {
@@ -127,8 +137,7 @@ void setupWifi() {
 
   display.clear();
   display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "watering system");
-  display.drawString(0, 15, "connecting to wifi...");
+  display.drawString(0, 2, "connecting to wifi...");
   display.display();
   
   WiFi.begin(ssid, password);
@@ -162,7 +171,7 @@ void setupDisplay() {
   
   display.clear();
   display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "watering sytem");
+  display.drawString(0, 2, "watering system");
   display.drawString(0, 15, "booting...");
   display.display();
 }
@@ -170,8 +179,7 @@ void setupDisplay() {
 void adjustRTC() {
   display.clear();
   display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "watering system");
-  display.drawString(0, 15, "adjust clock...");
+  display.drawString(0, 2, "adjust clock...");
   display.display();
   
   if (!Rtc.IsDateTimeValid()) {
@@ -198,15 +206,13 @@ RtcDateTime getDateTimeFromNTP() {
   while (true) {
     Serial.print(".");
     
-    // get time from NTP
+    // get epoche time from NTP
     timeClient.update();
-    long epocheTime = timeClient.getEpochTime();
+    unsigned long epocheTime = timeClient.getEpochTime();
 
     if (epocheTime > 1519561919) { // is correct
-      // calc timestamp from 2000
-      long timestampFrom2000 = epocheTime - 946684800;
-      
-      RtcDateTime dateTime = RtcDateTime(timestampFrom2000);
+      RtcDateTime dateTime;
+      dateTime.InitWithEpoch32Time(epocheTime);
       
       Serial.print(" ");
       Serial.println(Helper::getFormatedDateTime(dateTime));
@@ -267,6 +273,11 @@ void displaySensorValues(RtcDateTime dateTime, SensorValues values) {
   display.drawString(0, 15, String(values.getTemperature()) + " °C");
   display.drawString(64, 15, String(values.getHumidity()) + "%");
   display.drawString(64, 31, String(values.getSoilMoisture()));
+}
+
+void displayUpdateCounter(unsigned long nextMeasuringCounter) {
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 50, "update in " + Helper::getFormatedSeconds(nextMeasuringCounter));
 }
 
 void publishSensorValues(SensorValues values) {
