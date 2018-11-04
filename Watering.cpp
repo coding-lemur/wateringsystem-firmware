@@ -13,6 +13,11 @@ Watering::Watering(uint8_t pumpActivatePin) {
   _pumpStopMillis = 0;
 }
 
+void Watering::setCallback(void (*callback)(char*))
+{
+  _callback = callback;
+}
+
 void Watering::startPump(int milliseconds) {
   if (_isWatering) {
     return;
@@ -25,8 +30,9 @@ void Watering::startPump(int milliseconds) {
   
   unsigned long currentMillis = millis();
   _pumpStopMillis = currentMillis + milliseconds;
-
+  
   _isWatering = true;
+  _callback("start");
 }
 
 void Watering::_stopPump() {
@@ -37,6 +43,7 @@ void Watering::_stopPump() {
   digitalWrite(_pumpActivatePin, LOW);
 
   _isWatering = false;
+  _callback("stop");
   
   Serial.println("watering finished");
 }

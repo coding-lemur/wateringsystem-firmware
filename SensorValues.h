@@ -2,22 +2,31 @@
 #define SensorValues_h
 
 #if ARDUINO < 100
-  #include <WProgramm.h>
+#include <WProgramm.h>
 #else
-  #include <Arduino.h>
+#include <Arduino.h>
 #endif
 
 class SensorValues {
   public:
-    SensorValues(int temperature, int humidity, int soilMoisture);
-    
-    int getTemperature();
-    int getHumidity();
+    SensorValues();
+    SensorValues(float temperature, float humidity, float pressure, int soilMoisture);
+
+    float getTemperature();
+    float getHumidity();
+    float getPressure();
+
     int getSoilMoisture();
-    
+
+    boolean isEmpty();
+
   private:
-    int _temperature;
-    int _humidity;
+    bool _isEmpty;
+
+    float _temperature;
+    float _humidity;
+    float _pressure;
+
     int _soilMoisture;
 };
 #endif

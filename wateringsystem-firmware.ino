@@ -1,240 +1,164 @@
 #include <pgmspace.h>
 
 #include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 
 #include <Wire.h>
 #include <PubSubClient.h>
-#include <RtcDS3231.h>
 #include <ArduinoJson.h>
+#include <BME280I2C.h>
 
-#include <SSD1306.h>
-
-#include "DhtHelper.h"
 #include "Helper.h"
 #include "Watering.h"
 #include "SensorValues.h"
 
-#define DHT_PIN                     D4
-#define PUMP_ACTIVATE_PIN           D5
-#define WATER_SENSOR_ACTIVATE_PIN   D6
-#define RTC_ACTIVATE_PIN            D7
-#define WATER_SENSOR_PIN            A0
+#define PUMP_ACTIVATE_PIN D5
+#define WATER_SENSOR_ACTIVATE_PIN D6
+#define WATER_SENSOR_PIN A0
 
-#define DHT_TYPE                    DHT11
-#define NTP_TIME_OFFSET             3600 // for timezone (in seconds) = 1h
+#define TOPIC_SENSORS_EVENT "wateringsystem/sensors"
+#define TOPIC_WATERING_EVENT "wateringsystem/watering"
 
-#define TOPIC_SENSORS               "wateringsystem/sensors"
-#define TOPIC_WATERING              "wateringsystem/actions/watering"
-#define TOPIC_MEASURING             "wateringsystem/actions/measuring"
-#define TOPIC_ADJUST_RTC            "wateringsystem/actions/rtc/adjust"
-#define TOPIC_SUBSCRIPTION          "wateringsystem/actions/#"
+#define TOPIC_ACTION_SUBSCRIPTION "wateringsystem/actions/#"
+#define TOPIC_WATERING_ACTION "wateringsystem/actions/watering"
+#define TOPIC_MEASURING_ACTION "wateringsystem/actions/measuring"
+#define TOPIC_DEEPSLEEP_ACTION "wateringsystem/actions/deepsleep"
 
-const char* ssid          = "mywifi";
-const char* password      = "123456";
+const char *ssid = "mywifi";
+const char *password = "123456";
 
-const char* mqtt_server   = "mqtt.eclipse.org";
-const char* mqtt_user     = "mceddy";
-const char* mqtt_password = "123456";
+const char *mqtt_server = "mqtt.eclipse.org";
+const char *mqtt_user = "mceddy";
+const char *mqtt_password = "123456";
 
-RtcDS3231<TwoWire> Rtc(Wire);
+const unsigned long waitAfterMeasureMillis = 900000; // 15 minutes
+
 DynamicJsonBuffer jsonBuffer;
 
-DhtHelper dhtHelper(DHT_PIN, DHT_TYPE);
 Watering watering(PUMP_ACTIVATE_PIN);
-
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, NTP_TIME_OFFSET);
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
+BME280I2C bme;
 
-SSD1306 display(0x3C, SDA, SCL);
-
-unsigned long nextMeasuringSeconds = 0;
-SensorValues values(0, 0, 0);
+SensorValues values;
 boolean measuringInProgress = false;
 
-void setup() {
+unsigned long lastMeasureMillis;
+
+void setup()
+{
   pinMode(WATER_SENSOR_ACTIVATE_PIN, OUTPUT);
   pinMode(WATER_SENSOR_PIN, INPUT);
 
-  pinMode(RTC_ACTIVATE_PIN, OUTPUT);
-  digitalWrite(RTC_ACTIVATE_PIN, HIGH);
-
   watering.setup();
-  
-  setupSerials();
-  setupDisplay();
+  watering.setCallback(wateringFinishedCallback);
+
+  Serial.begin(57600);
+  Wire.begin();
+
   setupWifi();
   setupMqttClient();
-  setupNtpClient();
-
-  adjustRTC();
+  setupBME280();
 }
 
-void loop() {
-  if (!mqttClient.connected()) {
+void loop()
+{
+  if (!mqttClient.connected())
+  {
     reconnectMqttClient();
   }
-  
-  RtcDateTime now = Rtc.GetDateTime();  
-  
-  unsigned long totalSeconds = now.TotalSeconds();
-    
-  if (totalSeconds >= nextMeasuringSeconds) {
-    nextMeasuringSeconds = totalSeconds + 3600; // wait 1 hour
-    doMeasure(now);
-  }
 
-  unsigned long nextMeasuringCounter = nextMeasuringSeconds - totalSeconds;
-  
-  if (!watering.isWatering() && !measuringInProgress) {
-    display.clear();
-    displaySensorValues(now, values);
-    displayUpdateCounter(nextMeasuringCounter);
-    display.display();
+  bool isTimeForMeasure = (millis() - lastMeasureMillis) > waitAfterMeasureMillis;
+
+  if (!measuringInProgress && (values.isEmpty() || isTimeForMeasure))
+  {
+    doMeasure();
   }
 
   mqttClient.loop();
   watering.loop();
 }
 
-void doMeasure(RtcDateTime dateTime) {
+void doMeasure()
+{
   measuringInProgress = true;
-  
-  display.clear();
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "measuring...");
-  display.display();
-  
+
   values = getSensorValues();
 
-  debugOutputValues(dateTime, values);
+  debugOutputValues(values);
   publishSensorValues(values);
 
+  lastMeasureMillis = millis();
   measuringInProgress = false;
 }
 
-void setupSerials() {
-  Serial.begin(57600);
-  
-  delay(100);
-
-  //Wire.begin();
-  Rtc.Begin();
-  dhtHelper.begin();
-  
-  delay(100);
-}
-
-void setupWifi() {
+void setupWifi()
+{
   Serial.print("Connecting to ");
   Serial.println(ssid);
 
-  display.clear();
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "connecting to wifi...");
-  display.display();
-  
+  showInfo("connecting to wifi...");
+
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-  
-  while (WiFi.status() != WL_CONNECTED) {
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
     delay(500);
     Serial.print(".");
   }
 
   Serial.println();
   Serial.println("WiFi connected");
-   
+
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
   delay(500);
 }
 
-void setupMqttClient() {
+void setupMqttClient()
+{
   mqttClient.setServer(mqtt_server, 1883);
   mqttClient.setCallback(mqttCallback);
 }
 
-void setupNtpClient() {
-  timeClient.begin();
-}
-
-void setupDisplay() {
-  display.init();
-  display.flipScreenVertically();
-  
-  display.clear();
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "watering system");
-  display.drawString(0, 15, "booting...");
-  display.display();
-}
-
-void adjustRTC() {
-  display.clear();
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 2, "adjust clock...");
-  display.display();
-  
-  if (!Rtc.IsDateTimeValid()) {
-    Serial.println("adjust RTC");
-
-    RtcDateTime now = getDateTimeFromNTP();
-    Rtc.SetDateTime(now);
-  }
-  
-  if (!Rtc.GetIsRunning()) {
-    Serial.println("RTC was not actively running, starting now");
-    Rtc.SetIsRunning(true);
+void setupBME280()
+{
+  while (!bme.begin())
+  {
+    showInfo("BME280", "Could not find BME280 sensor!");
+    delay(1000);
   }
 
-  // never assume the Rtc was last configured by you, so
-  // just clear them to your needed state
-  Rtc.Enable32kHzPin(false);
-  Rtc.SetSquareWavePin(DS3231SquareWavePin_ModeNone);
-}
-
-RtcDateTime getDateTimeFromNTP() {
-  Serial.print("get time from NTP ");
-  
-  while (true) {
-    Serial.print(".");
-    
-    // get epoche time from NTP
-    timeClient.update();
-    unsigned long epocheTime = timeClient.getEpochTime();
-
-    if (epocheTime > 1519561919) { // is correct
-      RtcDateTime dateTime;
-      dateTime.InitWithEpoch32Time(epocheTime);
-      
-      Serial.print(" ");
-      Serial.println(Helper::getFormatedDateTime(dateTime));
-      
-      return dateTime;
-    }
-
-    delay(200);
+  switch (bme.chipModel())
+  {
+  case BME280::ChipModel_BME280:
+    Serial.println("Found BME280 sensor! Success.");
+    break;
+  case BME280::ChipModel_BMP280:
+    Serial.println("Found BMP280 sensor! No Humidity available.");
+    break;
+  default:
+    Serial.println("Found UNKNOWN sensor! Error!");
   }
 }
 
-SensorValues getSensorValues() {
-  dhtHelper.refreshValues();
-  int temperature = dhtHelper.getTemperature();
-  int humidity    = dhtHelper.getHumidity();
-  
+SensorValues getSensorValues()
+{
+  float temp(NAN), hum(NAN), pres(NAN);
+
+  BME280::TempUnit tempUnit(BME280::TempUnit_Celsius);
+  BME280::PresUnit presUnit(BME280::PresUnit_hPa);
+  bme.read(pres, temp, hum, tempUnit, presUnit);
+
   int soilMoisture = getWaterValue();
 
-  return SensorValues(temperature, humidity, soilMoisture);
+  return SensorValues(temp, hum, pres, soilMoisture);
 }
 
-int getWaterValue() {
+int getWaterValue()
+{
   // enable water sensor
   digitalWrite(WATER_SENSOR_ACTIVATE_PIN, HIGH);
 
@@ -249,115 +173,128 @@ int getWaterValue() {
   return value;
 }
 
-void debugOutputValues(RtcDateTime dateTime, SensorValues values) {
-  Serial.print("datetime: ");
-  Serial.println(Helper::getFormatedDateTime(dateTime));
-  
+void debugOutputValues(SensorValues values)
+{
   Serial.print("temperature: ");
   Serial.print(values.getTemperature());
   Serial.println("C");
-  
+
   Serial.print("humidity: ");
   Serial.print(values.getHumidity());
   Serial.println("%");
-  
+
+  Serial.print("pressure: ");
+  Serial.print(values.getPressure());
+  Serial.println("hPa");
+
   Serial.print("water: ");
   Serial.println(values.getSoilMoisture());
 }
 
-void displaySensorValues(RtcDateTime dateTime, SensorValues values) {
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 0, Helper::getFormatedDateTime(dateTime));
+void publishSensorValues(SensorValues values)
+{
+  JsonObject &json = jsonBuffer.createObject();
 
-  display.setFont(ArialMT_Plain_16);
-  display.drawString(0, 15, String(values.getTemperature()) + " °C");
-  display.drawString(64, 15, String(values.getHumidity()) + "%");
-  display.drawString(64, 31, String(values.getSoilMoisture()));
-}
-
-void displayUpdateCounter(unsigned long nextMeasuringCounter) {
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(0, 50, "update in " + Helper::getFormatedSeconds(nextMeasuringCounter));
-}
-
-void publishSensorValues(SensorValues values) {
-  JsonObject& json = jsonBuffer.createObject();
-  
-  json["Temperature"]  = values.getTemperature();
-  json["Humidity"]     = values.getHumidity();
+  json["Temperature"] = values.getTemperature();
+  json["Humidity"] = values.getHumidity();
   json["SoilMoisture"] = values.getSoilMoisture();
-  
-  char buffer[64];  
+  json["Pressure"] = values.getPressure();
+
+  char buffer[90];
   json.printTo(buffer);
-  
-  mqttClient.publish(TOPIC_SENSORS, buffer);
+
+  mqttClient.publish(TOPIC_SENSORS_EVENT, buffer);
 }
 
-void reconnectMqttClient() {
-  while (!mqttClient.connected()) {
+void reconnectMqttClient()
+{
+  while (!mqttClient.connected())
+  {
     Serial.print("Attempting MQTT connection...");
-    
+
     // Attempt to connect
-    if (mqttClient.connect("watering_system", mqtt_user, mqtt_password)) {
+    if (mqttClient.connect("watering_system", mqtt_user, mqtt_password))
+    {
       Serial.println("connected");
 
-      mqttClient.subscribe(TOPIC_SUBSCRIPTION);
-  } else {
-    Serial.print("failed, rc=");
-    Serial.print(mqttClient.state());
-    Serial.println(" try again in 5 seconds");
-    
-    // Wait 5 seconds before retrying
-    delay(5000);
+      mqttClient.subscribe(TOPIC_ACTION_SUBSCRIPTION);
+    }
+    else
+    {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
   }
- }
+}
+
+void showInfo(String line1)
+{
+  showInfo(line1, "");
+}
+
+void showInfo(String line1, String line2)
+{
+  Serial.println(line1);
+
+  if (line2.length() > 0)
+  {
+    Serial.println(line2);
+  }
+}
+
+void wateringFinishedCallback(char *action)
+{
+  mqttClient.publish(TOPIC_WATERING_EVENT, action);
 }
 
 // handle message arrived
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
+void mqttCallback(char *topic, byte *payload, unsigned int length)
+{
   String payloadString = Helper::byteArrayToString(payload, length);
   String topicString = String(topic);
-  
+
   Serial.print("Message arrived [");
   Serial.print(topicString);
   Serial.println("]");
-  
+
   Serial.print("payload: ");
   Serial.println(payloadString);
-  
-  if (topicString == TOPIC_WATERING) {
+
+  if (topicString == TOPIC_WATERING_ACTION)
+  {
     int wateringMilliseconds = payloadString.toInt();
     Serial.print("watering value as int: ");
     Serial.println(wateringMilliseconds);
 
     // value in rage (between 1 second and 3 minutes)?
-    if ((wateringMilliseconds >= 1000) && (wateringMilliseconds <= 180000)) {
-      display.clear();
-      display.setFont(ArialMT_Plain_10);
-      display.drawString(0, 2, "MQTT action");
-      display.drawString(0, 15, "watering " + String(wateringMilliseconds) + " millis");
-      display.display();
-      
+    if ((wateringMilliseconds >= 1000) && (wateringMilliseconds <= 180000))
+    {
+      showInfo("MQTT action", "watering " + String(wateringMilliseconds) + " millis");
+
       watering.startPump(wateringMilliseconds);
     }
   }
-  else if (topicString == TOPIC_MEASURING) {
-    display.clear();
-    display.setFont(ArialMT_Plain_10);
-    display.drawString(0, 2, "MQTT action");
-    display.drawString(0, 15, "measuring...");
-    display.display();
-    
-    RtcDateTime now = Rtc.GetDateTime();
-    doMeasure(now);
+  else if (topicString == TOPIC_MEASURING_ACTION)
+  {
+    showInfo("MQTT action", "measuring...");
+
+    doMeasure();
   }
-  else if (topicString == TOPIC_ADJUST_RTC) {
-    display.clear();
-    display.setFont(ArialMT_Plain_10);
-    display.drawString(0, 2, "MQTT action");
-    display.drawString(0, 15, "adjust clock...");
-    display.display();
-    
-    adjustRTC();
+  else if (topicString == TOPIC_DEEPSLEEP_ACTION)
+  {
+    if (payloadString.length() < 1)
+    {
+      // no payload
+      return;
+    }
+
+    // convert payload (seconds to µ)
+    uint64_t sleepTimeMicroSeconds = payloadString.toInt() * 1e6;
+
+    ESP.deepSleep(sleepTimeMicroSeconds);
   }
 }

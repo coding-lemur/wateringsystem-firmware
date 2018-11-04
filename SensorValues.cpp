@@ -1,25 +1,40 @@
 #if ARDUINO < 100
-  #include <WProgramm.h>
+#include <WProgramm.h>
 #else
-  #include <Arduino.h>
+#include <Arduino.h>
 #endif
 
 #include "SensorValues.h"
 
-SensorValues::SensorValues(int temperature, int humidity, int soilMoisture) :
+SensorValues::SensorValues() :
+  _isEmpty(true) {
+}
+
+SensorValues::SensorValues(float temperature, float humidity, float pressure, int soilMoisture) :
+  _isEmpty(false),
   _temperature(temperature),
   _humidity(humidity),
+  _pressure(pressure),
   _soilMoisture(soilMoisture) {
 }
 
-int SensorValues::getTemperature() {
+float SensorValues::getTemperature() {
   return _temperature;
 }
 
-int SensorValues::getHumidity() {
+float SensorValues::getHumidity() {
   return _humidity;
+}
+
+float SensorValues::getPressure() {
+  return _pressure;
 }
 
 int SensorValues::getSoilMoisture() {
   return _soilMoisture;
 }
+
+boolean SensorValues::isEmpty() {
+  return _isEmpty;
+}
+
